@@ -402,6 +402,51 @@ def getF1Score(model):
 
     return str("{:.2f}".format(f1_score(test_stance_list_max, y_pred_max, average="macro") * 100))+"%"
 
+import seaborn as sns 
+
+def getPredictionBarPlot(model, target):
+  y_pred = model.predict([ test_tweet_lines_pad, test_target_lines_pad])
+    
+  y_pred_max = np.argmax(y_pred, axis=1)
+  test_stance_list_max= np.argmax(test_stance_list, axis=1)
+
+  index = 0
+  rows_list = []
+
+  counter = [0,0,0,0,0,0]
+
+  for val in test_data["Target"]:
+    if val == target:
+      if y_pred_max[index] == 0:
+        counter[0]+= 1
+      elif y_pred_max[index] == 1:
+        counter[1] += 1
+      elif y_pred_max[index] == 2:
+        counter[2] += 1
+        
+      if test_stance_list_max[index] == 0:
+        counter[3] += 1
+      elif test_stance_list_max[index] == 1:
+        counter[4] += 1
+      elif test_stance_list_max[index] == 2:
+        counter[5] += 1
+  
+    index += 1
+
+  rows_list.append({"type": "actual", "class": "favor", "count": counter[0]})
+  rows_list.append({"type": "actual", "class": "neutral", "count": counter[1]})
+  rows_list.append({"type": "actual", "class": "against", "count": counter[2]})
+  rows_list.append({"type": "predicted", "class": "favor", "count": counter[3]})
+  rows_list.append({"type": "predicted", "class": "neutral", "count": counter[4]})
+  rows_list.append({"type": "predicted", "class": "against", "count": counter[5]})
+
+  stats_df = pd.DataFrame(rows_list)  
+
+  sns.barplot(x="class", y="count", hue="type", data=stats_df)
+  plt.ylabel("Count", size=14)
+  plt.xlabel("Class", size=14)
+  plt.title("Predicted vs Actual: " + target, size=18)
+
 """### Importing GloVe Twitter Embedding Vector"""
 
 !ls
@@ -488,6 +533,18 @@ import tensorflow.keras.backend as K
 
 from tensorflow.keras import initializers
 from tensorflow.keras.layers import BatchNormalization
+
+def optimizer_adam(dec_rate = 30,lr = 0.001, xtrain = None, batch_size = 32):
+  STEPS_PER_EPOCH = xtrain.shape[0]
+  lr_adam = lr
+
+  lr_schedule = tf.keras.optimizers.schedules.InverseTimeDecay(
+  lr_adam,
+  decay_steps=STEPS_PER_EPOCH*1000,
+  decay_rate=dec_rate,
+  staircase=False)
+  opt_adam = optimizers.Adam(learning_rate=lr_schedule)
+  return opt_adam
 
 def tiny_model(embedding_dim = 25, E_T = E_T_25d):
   ##########################
@@ -603,9 +660,6 @@ history = tiny_model_train.fit(
                   batch_size=BATCH_SIZE,
                   verbose=VERBOSE,
                   shuffle=SHUFFLE)
-
-# Tiny Model Test Accuracy
-getTestAccuracy(tiny_model_train)
 
 """### Simple model with 25-dimensional embedding vector"""
 
@@ -771,8 +825,6 @@ history_tiny_model_with_reg_100d = tiny_model_with_reg_100d_train.fit(
         batch_size=BATCH_SIZE,
         verbose=VERBOSE,
         shuffle=SHUFFLE)
-
-getTestAccuracy(tiny_model_with_reg_100d_train)
 
 histories = {}
 
@@ -964,13 +1016,11 @@ history_model_with_attention = model_with_attention_train.fit(
         shuffle=SHUFFLE,
         callbacks=CALLBACKS)
 
-getTestAccuracy(model_with_attention_train)
-
 plotter_single(history_model_with_attention)
 
 """## Model #3: Model with Tweet input conditioned with Target input"""
 
-def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_val = 0.0025, E_T=E_T_100d, learning_rate=0.0004):
+def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_val = 0.0025, E_T=E_T_100d, learning_rate=0.0004, batch_size = 32):
   ##########################
   # Model Inputs
   ##########################
@@ -1084,8 +1134,8 @@ def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_v
   ##########################
 
   # Compile model
-  lr = learning_rate
-  optimizer = optimizers.Adam(lr=lr)
+  #lr = learning_rate
+  optimizer = optimizer_adam(lr=learning_rate, xtrain=tweet_lines_pad, batch_size = batch_size )
   model.compile(loss='categorical_crossentropy',
                 optimizer=optimizer,
                 metrics=['accuracy'])
@@ -1119,8 +1169,6 @@ history_model_conditional_encoding = model_conditional_encoding_train.fit(
                   verbose=VERBOSE,
                   shuffle=SHUFFLE,
                   callbacks=CALLBACKS)
-
-getTestAccuracy(model_conditional_encoding_train)
 
 plotter_single(history_model_conditional_encoding)
 
@@ -1163,10 +1211,6 @@ history_model_conditional_encoding = model_conditional_encoding_train.fit(
                   callbacks=CALLBACKS)
 
 plotter_single(history_model_conditional_encoding)
-
-getTestAccuracy(model_conditional_encoding_train)
-
-getF1Score(model_conditional_encoding_train)
 
 model_conditional_encoding_train = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d)
 
@@ -1399,8 +1443,6 @@ history_model_bi_conditional_encoding = model_bi_conditional_encoding_train.fit(
 
 plotter_single(history_model_bi_conditional_encoding)
 
-getTestAccuracy(model_bi_conditional_encoding_train)
-
 def model_bi_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_val = 0.0025, learning_rate=):
   ##########################
   # Model Inputs
@@ -1627,24 +1669,27 @@ The hyperparameters that will be searched are (in order of importance):
 ### Learning Rate
 """
 
-h_histories = {}
+h_alpha_histories = {}
 
 # Learning Rate Values (Previously determined desired range).
 alpha_vals = [0.001, 0.0004, 0.0002, 0.0001]
 
 # Perform grid search.
 for val in alpha_vals:
-  h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = val)
 
   # Define Fitting Parameters
   VAL_SPLIT = 0.2
-
-  MAX_EPOCHS = 50
+  MAX_EPOCHS = 80
   BATCH_SIZE = 32
   VERBOSE = 1
   SHUFFLE = True
 
-  h_histories['model_ce_alpha'+ '_h' + str(val)] = h_model.fit(
+  # Define model
+  h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = val, batch_size=BATCH_SIZE)
+
+  
+
+  h_alpha_histories['model_ce_alpha'+ '_h' + str(val)] = h_model.fit(
                                                 x=[tweet_lines_pad, target_lines_pad],
                                                 y=stance_list,
                                                 validation_split=VAL_SPLIT,
@@ -1653,36 +1698,39 @@ for val in alpha_vals:
                                                 verbose=VERBOSE,
                                                 shuffle=SHUFFLE)
 
-plotter(h_histories, ylim=[0.5,3])
+plotter(h_alpha_histories, ylim=[0.5,3])
 
-plotter(h_histories, metric="accuracy", ylim=[0.4,0.8])
+plotter(h_alpha_histories, metric="accuracy", ylim=[0.4,0.8])
 
-compare_params(params_list=alpha_vals, param_name="Alpha", model_name="model_ce_alpha")
+compare_params(params_list=alpha_vals,h_histories=h_alpha_histories, param_name="Alpha", model_name="model_ce_alpha")
 
-compare_params(metric="accuracy",params_list=alpha_vals, param_name="Alpha", model_name="model_ce_alpha")
+compare_params(metric="accuracy",h_histories=h_alpha_histories, params_list=alpha_vals, param_name="Alpha", model_name="model_ce_alpha")
 
 """### Dropout Rate"""
 
 h_dropout_histories = {}
 
 # Dropout values.
-dropout_vals = [0.2, 0.4, 0.45, 0.55]
+dropout_vals = [0.3, 0.4, 0.45, 0.55]
 
 best_learning_rate = 0.0004
 
 # Perform grid search.
 for val in dropout_vals:
-  h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = best_learning_rate, dropout_rate = val )
 
   # Define Fitting Parameters
   VAL_SPLIT = 0.2
 
-  MAX_EPOCHS = 50
+  MAX_EPOCHS = 80
   BATCH_SIZE = 32
   VERBOSE = 1
   SHUFFLE = True
 
-  h_dropout_histories['model_ce_alpha'+ '_h' + str(val)] = h_model.fit(
+  h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = best_learning_rate, dropout_rate = val, batch_size = BATCH_SIZE )
+
+  
+
+  h_dropout_histories['model_ce_dropout'+ '_h' + str(val)] = h_model.fit(
                                                 x=[tweet_lines_pad, target_lines_pad],
                                                 y=stance_list,
                                                 validation_split=VAL_SPLIT,
@@ -1747,7 +1795,7 @@ batch_vals = [8, 16, 32, 64]
 
 best_learning_rate = 0.0004
 best_dropout_rate = 0.4
-best_lambda_val = 0.005
+best_lambda_val = 0.0025
 
 # Perform grid search.
 for val in batch_vals:
@@ -1770,6 +1818,14 @@ for val in batch_vals:
                                                 verbose=VERBOSE,
                                                 shuffle=SHUFFLE)
 
+plotter(h_batch_histories, ylim=[0.5,3])
+
+plotter(h_batch_histories, metric="accuracy", ylim=[0.5,0.8])
+
+compare_params(params_list=batch_vals, h_histories=h_batch_histories,param_name="Batch Size", model_name="model_ce_batch")
+
+compare_params(params_list=batch_vals, h_histories=h_batch_histories,param_name="Batch Size", model_name="model_ce_batch", metric="accuracy")
+
 """## Final Model
 
 ### Training of final model with selected hyper-parameters
@@ -1777,5 +1833,83 @@ for val in batch_vals:
 
 
 
+# Define best hyperparameters detemined from grid search above.
+best_learning_rate = 0.0002
+best_dropout_rate = 0.45
+best_lambda_val = 0.0025
+best_batch_size = 32
+
+# Defined final model architecture
+final_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = best_learning_rate, dropout_rate = best_dropout_rate, lambda_val=best_lambda_val)
+
+
+# Define Fitting Parameters
+VAL_SPLIT = 0.2
+MAX_EPOCHS = 200
+BATCH_SIZE = best_batch_size
+VERBOSE = 1
+SHUFFLE = True
+
+# Call backs (Reduce LR on plateau and finally stop early and save best weights)
+
+# Early stopping with patience of 10 epochs.
+early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=VERBOSE)
+
+# Decrease lr to 33% on plateau.
+#lr_reducer = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=8, verbose=VERBOSE, mode='auto', min_lr=0.00004)
+
+CALLBACKS = [early_stopping]
+
+
+history_final_model = final_model.fit(
+                  x=[tweet_lines_pad, target_lines_pad],
+                  y=stance_list,
+                  validation_split=VAL_SPLIT,
+                  epochs=MAX_EPOCHS,
+                  batch_size=BATCH_SIZE,
+                  verbose=VERBOSE,
+                  shuffle=SHUFFLE,
+                  callbacks=CALLBACKS)
+
+plotter_single(history_final_model)
+
+histories = {}
+
+histories["final_model"] = history_final_model
+
+plotter(histories, ylim = [0.5, 2])
+
 """### Prediction on Unseen Data"""
 
+getTestAccuracy(final_model)
+
+getF1Score(final_model)
+
+uniqueTarget = test_data["Target"].unique()
+
+getPredictionBarPlot(final_model,uniqueTarget[0])
+
+getPredictionBarPlot(final_model,uniqueTarget[1])
+
+getPredictionBarPlot(final_model, uniqueTarget[2])
+
+getPredictionBarPlot(final_model, uniqueTarget[3])
+
+getPredictionBarPlot(final_model, uniqueTarget[4])
+
+"""### Independant Evaluation with Twitter API"""
+
+!pip install twython
+
+from twython import Twython
+APP_KEY = '28ZLoVRN8SE1aoA1hxU4wjgvY'
+APP_SECRET = '0KmYLLmkzQy1cFmhXqTuBwCFe7YTB869qy0mdztHd85zrTleYn'
+
+twitter = Twython(APP_KEY, APP_SECRET)
+search_results = twitter.search(q="#prayToEndAbortion", rpp="10")
+
+print(search_results)
+
+for tweet in search_results["statuses"]:
+    # print("Tweet from @%s Date: %s" % (tweet['from_user'].encode('utf-8'),tweet['created_at']))
+    print(tweet['text'].encode('utf-8'),"\n")
