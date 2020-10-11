@@ -216,20 +216,6 @@ for line in lines_target:
     
     target.append(tokens)
 
-lines_hashtag = train_data["hashtag"].values.tolist()
-
-
-for line in lines_hashtag:
-  line = ' '.join(line)
-  line = ' '.join(re.sub('([^0-9A-Za-z \t])|(\w+:\/\/\S+)', ' ', line).split())
-  line = ' '.join(segment(line))
-  tokens = word_tokenize(line)
-
-    # convert to lower case
-  tokens = [w.lower() for w in tokens]
-    
-  hashtag.append(tokens)
-
 # Max length for tweet sentences.
 len(max(tweets,key = len))
 
@@ -276,8 +262,6 @@ encode = {
 train_data["Stance"] = train_data["Stance"].apply(lambda x: encode[x])
 
 category = train_data['Stance'].values
-
-print(category)
 
 indices = np.arange(lines_pad_tweets.shape[0])
 np.random.shuffle(indices)
@@ -366,7 +350,7 @@ for line in test_lines_hashtag:
   line = ' '.join(segment(line))
   tokens = word_tokenize(line)
 
-    # convert to lower case
+  # convert to lower case
   tokens = [w.lower() for w in tokens]
     
   test_hashtag.append(tokens)
@@ -614,8 +598,8 @@ from tensorflow.keras.layers import BatchNormalization
 
 """Attention layer source: https://www.analyticsvidhya.com/blog/2019/11/comprehensive-guide-attention-mechanism-deep-learning/"""
 
-from tensorflow.keras.layers import Layer
-import tensorflow.keras.backend as K
+from keras.layers import Layer
+import keras.backend as K
 
 class attention(Layer):
     def __init__(self,**kwargs):
@@ -640,7 +624,7 @@ class attention(Layer):
         return super(attention,self).get_config()
 
 def optimizer_adam(dec_rate = 30,lr = 0.001, xtrain = None, batch_size = 32):
-  STEPS_PER_EPOCH = xtrain.shape[0]
+  STEPS_PER_EPOCH = xtrain.shape[0] // batch_size
   lr_adam = lr
 
   lr_schedule = tf.keras.optimizers.schedules.InverseTimeDecay(
@@ -651,7 +635,9 @@ def optimizer_adam(dec_rate = 30,lr = 0.001, xtrain = None, batch_size = 32):
   opt_adam = optimizers.Adam(learning_rate=lr_schedule)
   return opt_adam
 
-def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_val = 0.0025, learning_rate=0.0004, batch_size = 32, E_T= E_T_200d):
+# Model tweets conditioned on Target.
+def model_conditional_encoding(embedding_dim = 200, dropout_rate = 0.45, lambda_val = 0.0025, learning_rate=0.0004, batch_size = 32, E_T= E_T_200d):
+  
   ##########################
   # Model Inputs
   ##########################
@@ -659,7 +645,7 @@ def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_v
   # define three sets of inputs (Tweets, Target Topic, Hashtag)
   input_tweets = Input(shape=(X_train_tweets_pad.shape[1],))
   input_target = Input(shape=(X_train_target_pad.shape[1],))
-
+  
   input_tweet_length = X_train_tweets_pad.shape[1]
   input_target_length = X_train_target_pad.shape[1]
 
@@ -725,6 +711,9 @@ def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_v
   tweet_encoder_out = tweet_encoder(y, initial_state=[target_forward_h, target_forward_s,target_backward_h, target_backward_s])
 
 
+  ##########################
+  # Attention Layer
+  ##########################
   attention_out = attention()(tweet_encoder_out) 
 
 
@@ -736,20 +725,17 @@ def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_v
   FC_dim_2 = 256
   nb_classes = 3
 
-  # apply a FC layer and then a softmax layer to predict the stance classes.
-
-
+  # apply two FC layers and then a softmax layer to predict the stance classes.
   z = Dense(FC_dim_1, activation="relu", kernel_regularizer=regularizers.l2(lambda_val))(attention_out)
 
   z = Dropout(dropout_rate)(z)
 
-  # apply a FC layer and then a softmax layer to predict the stance classes.
   z = Dense(FC_dim_2, activation="relu", kernel_regularizer=regularizers.l2(lambda_val))(z)
 
   z = Dropout(dropout_rate)(z)
 
   z = BatchNormalization()(z)
-
+  
   z = Dense(nb_classes, activation="softmax")(z)
 
 
@@ -775,123 +761,9 @@ def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_v
   
   return model
 
-def model_conditional_encoding(embedding_dim = 25, dropout_rate = 0.45, lambda_val = 0.0025, E_T=E_T_200d, learning_rate=0.0002, batch_size = 32):
-  ##########################
-  # Model Inputs
-  ##########################
+"""### Model Summary"""
 
-  # define three sets of inputs (Tweets, Target Topic, Hashtag)
-  input_tweets = Input(shape=(X_train_tweets_pad.shape[1],))
-  input_target = Input(shape=(X_train_target_pad.shape[1],))
-
-  input_tweet_length = X_train_tweets_pad.shape[1]
-  input_target_length = X_train_target_pad.shape[1]
-
-  # Initalize Embedding Paramaters
-  word_embedding_dim = embedding_dim
-  nb_words = vocab_size
-
-  # Number of Neurons in RNN Layer.
-  x_RNN_dim = 128
-  y_RNN_dim = 128
-  
-
-  ##########################
-  # First Branch (Tweet)
-  ##########################
-
-  # the first branch (model x), that operates on the first input (input target)
-  x = Embedding(output_dim=word_embedding_dim,
-                      input_dim=nb_words,
-                      input_length=input_target_length,
-                      weights=[E_T],
-                      trainable=False)(input_target)
-
-  x = Dropout(dropout_rate)(x)
-
-  target_encoding = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(x_RNN_dim,  
-                                    return_sequences=False, 
-                                    return_state = True,
-                                    kernel_regularizer=regularizers.l2(lambda_val),
-                                    activity_regularizer=regularizers.l2(lambda_val),
-                                    dropout=dropout_rate,
-                                    recurrent_dropout=dropout_rate))
-
-  (target_encoding, target_forward_h, target_forward_s,target_backward_h, target_backward_s) = target_encoding(x)
-
-
-
-  ##########################
-  # Second Branch (Tweet)
-  # Initalize Second Branch with First Branch encoding.
-  ##########################
-
-  # the second branch (model y), that operates on the second input (input target)
-  y = Embedding(output_dim=word_embedding_dim,
-                      input_dim=nb_words,
-                      input_length=input_tweet_length,
-                      weights=[E_T],
-                      trainable=False)(input_tweets)
-
-  y = Dropout(dropout_rate)(y)
-
-  tweet_encoder = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(y_RNN_dim,  
-                                    return_sequences=True,
-                                    return_state = False, 
-                                    kernel_regularizer=regularizers.l2(lambda_val),
-                                    activity_regularizer=regularizers.l2(lambda_val),
-                                    dropout=dropout_rate,
-                                    recurrent_dropout=dropout_rate))
-
-
-  tweet_encoder_out = tweet_encoder(y, initial_state=[target_forward_h, target_forward_s,target_backward_h, target_backward_s])
-
-
-  attention_out = attention()(tweet_encoder_out)
-  ##########################
-  # FC and Final Layer
-  ##########################
-
-  FC_dim_1 = 256
-  FC_dim_2 = 256
-  nb_classes = 3
-
-  # apply a FC layer and then a softmax layer to predict the stance classes.
-  z = Dense(FC_dim_1, activation="relu", kernel_regularizer=regularizers.l2(lambda_val))(attention_out)
-
-  z = Dropout(dropout_rate)(z)
-
-  # apply a FC layer and then a softmax layer to predict the stance classes.
-  z = Dense(FC_dim_2, activation="relu", kernel_regularizer=regularizers.l2(lambda_val))(z)
-
-  z = Dropout(dropout_rate)(z)
-
-  z = BatchNormalization()(z)
-
-  z = Dense(nb_classes, activation="softmax")(z)
-
-
-
-  ##########################
-  # Model Building
-  ##########################
-
-  # Build combined model.
-  model = Model(inputs=[input_tweets,input_target], outputs=z)
-
-  
-  ##########################
-  # Model Compilation
-  ##########################
-
-  # Compile model
-  #lr = learning_rate
-  optimizer = optimizer_adam(lr=learning_rate, xtrain=X_train_tweets_pad, batch_size = batch_size )
-  model.compile(loss='categorical_crossentropy',
-                optimizer=optimizer,
-                metrics=['accuracy'])
-  
-  return model
+model_conditional_encoding().summary()
 
 """## Hyperparameter Search
 
@@ -911,7 +783,7 @@ The hyperparameters that will be searched are (in order of importance):
 h_alpha_histories = {}
 
 # Learning Rate Values (Previously determined desired range).
-alpha_vals = [0.001, 0.0004, 0.0002, 0.0001]
+alpha_vals = [0.001, 0.0005, 0.00025, 0.0001]
 
 # Perform grid search.
 for val in alpha_vals:
@@ -919,23 +791,21 @@ for val in alpha_vals:
   # Define Fitting Parameters
   VAL_SPLIT = 0.2
   MAX_EPOCHS = 80
-  BATCH_SIZE = 32
+  BATCH_SIZE = 64
   VERBOSE = 1
   SHUFFLE = True
 
   # Define model
   h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = val, batch_size=BATCH_SIZE)
 
-  
-
   h_alpha_histories['model_ce_alpha'+ '_h' + str(val)] = h_model.fit(
-                                                x=[tweet_lines_pad, target_lines_pad],
-                                                y=stance_list,
-                                                validation_split=VAL_SPLIT,
-                                                epochs=MAX_EPOCHS,
-                                                batch_size=BATCH_SIZE,
-                                                verbose=VERBOSE,
-                                                shuffle=SHUFFLE)
+                                x=[X_train_tweets_pad,X_train_target_pad],
+                                y=y_train,
+                                validation_data=([X_val_tweets_pad,X_val_target_pad],y_val),
+                                epochs=MAX_EPOCHS,
+                                batch_size=BATCH_SIZE,
+                                verbose=VERBOSE,
+                                shuffle=SHUFFLE)
 
 plotter(h_alpha_histories, ylim=[0.5,3])
 
@@ -950,18 +820,17 @@ compare_params(metric="accuracy",h_histories=h_alpha_histories, params_list=alph
 h_dropout_histories = {}
 
 # Dropout values.
-dropout_vals = [0.3, 0.4, 0.45, 0.55]
+dropout_vals = [0.4, 0.45, 0.5, 0.55]
 
-best_learning_rate = 0.0004
+best_learning_rate = 0.0005
 
 # Perform grid search.
 for val in dropout_vals:
 
   # Define Fitting Parameters
   VAL_SPLIT = 0.2
-
   MAX_EPOCHS = 80
-  BATCH_SIZE = 32
+  BATCH_SIZE = 64
   VERBOSE = 1
   SHUFFLE = True
 
@@ -970,13 +839,13 @@ for val in dropout_vals:
   
 
   h_dropout_histories['model_ce_dropout'+ '_h' + str(val)] = h_model.fit(
-                                                x=[tweet_lines_pad, target_lines_pad],
-                                                y=stance_list,
-                                                validation_split=VAL_SPLIT,
-                                                epochs=MAX_EPOCHS,
-                                                batch_size=BATCH_SIZE,
-                                                verbose=VERBOSE,
-                                                shuffle=SHUFFLE)
+                                x=[X_train_tweets_pad,X_train_target_pad],
+                                y=y_train,
+                                validation_data=([X_val_tweets_pad,X_val_target_pad],y_val),
+                                epochs=MAX_EPOCHS,
+                                batch_size=BATCH_SIZE,
+                                verbose=VERBOSE,
+                                shuffle=SHUFFLE)
 
 plotter(h_dropout_histories, ylim=[0.5,3])
 
@@ -993,28 +862,28 @@ h_lambda_histories = {}
 # L2 regularization values.
 lambda_vals = [0.001, 0.0025, 0.005, 0.01]
 
-best_learning_rate = 0.0004
-best_dropout_rate = 0.45
+best_learning_rate = 0.0005
+best_dropout_rate = 0.5
 
 # Perform grid search.
 for val in lambda_vals:
   # Define Fitting Parameters
   VAL_SPLIT = 0.2
   MAX_EPOCHS = 80
-  BATCH_SIZE = 32
+  BATCH_SIZE = 64
   VERBOSE = 1
   SHUFFLE = True
 
   h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = best_learning_rate, dropout_rate=best_dropout_rate, lambda_val = val, batch_size = BATCH_SIZE)
 
   h_lambda_histories['model_ce_lambda'+ '_h' + str(val)] = h_model.fit(
-                                                x=[tweet_lines_pad, target_lines_pad],
-                                                y=stance_list,
-                                                validation_split=VAL_SPLIT,
-                                                epochs=MAX_EPOCHS,
-                                                batch_size=BATCH_SIZE,
-                                                verbose=VERBOSE,
-                                                shuffle=SHUFFLE)
+                                x=[X_train_tweets_pad,X_train_target_pad],
+                                y=y_train,
+                                validation_data=([X_val_tweets_pad,X_val_target_pad],y_val),
+                                epochs=MAX_EPOCHS,
+                                batch_size=BATCH_SIZE,
+                                verbose=VERBOSE,
+                                shuffle=SHUFFLE)
 
 plotter(h_lambda_histories, ylim=[0.5,3])
 
@@ -1031,8 +900,8 @@ h_batch_histories = {}
 # Learning Rate Values.
 batch_vals = [16, 32, 64]
 
-best_learning_rate = 0.0004
-best_dropout_rate = 0.45
+best_learning_rate = 0.0005
+best_dropout_rate = 0.5
 best_lambda_val = 0.0025
 
 # Perform grid search.
@@ -1049,13 +918,13 @@ for val in batch_vals:
   h_model = model_conditional_encoding(embedding_dim=200, E_T=E_T_200d, learning_rate = best_learning_rate, dropout_rate= best_dropout_rate, lambda_val= best_lambda_val, batch_size = BATCH_SIZE )
 
   h_batch_histories['model_ce_batch'+ '_h' + str(val)] = h_model.fit(
-                                                x=[tweet_lines_pad, target_lines_pad],
-                                                y=stance_list,
-                                                validation_split=VAL_SPLIT,
-                                                epochs=MAX_EPOCHS,
-                                                batch_size=BATCH_SIZE,
-                                                verbose=VERBOSE,
-                                                shuffle=SHUFFLE)
+                                x=[X_train_tweets_pad,X_train_target_pad],
+                                y=y_train,
+                                validation_data=([X_val_tweets_pad,X_val_target_pad],y_val),
+                                epochs=MAX_EPOCHS,
+                                batch_size=BATCH_SIZE,
+                                verbose=VERBOSE,
+                                shuffle=SHUFFLE)
 
 plotter(h_batch_histories, ylim=[0.5,3])
 
@@ -1071,29 +940,23 @@ compare_params(params_list=batch_vals, h_histories=h_batch_histories,param_name=
 """
 
 # Define best hyperparameters detemined from grid search above.
-best_learning_rate = 0.0004
-best_dropout_rate = 0.45
+best_learning_rate = 0.0005
+best_dropout_rate = 0.5
 best_lambda_val = 0.0025
 best_batch_size = 64
 
-# Defined final model architecture
-final_model = model_conditional_encoding(embedding_dim=200, learning_rate = best_learning_rate, dropout_rate = best_dropout_rate, lambda_val=best_lambda_val)
-
 
 # Define Fitting Parameters
-VAL_SPLIT = 0.2
 MAX_EPOCHS = 200
 BATCH_SIZE = best_batch_size
 VERBOSE = 1
 SHUFFLE = True
 
-# Call backs (Reduce LR on plateau and finally stop early and save best weights)
+# Defined final model architecture
+final_model = model_conditional_encoding(embedding_dim=200, learning_rate = best_learning_rate, dropout_rate = best_dropout_rate, lambda_val=best_lambda_val, batch_size = BATCH_SIZE)
 
 # Early stopping with patience of 10 epochs.
-early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=VERBOSE)
-
-# Decrease lr to 33% on plateau.
-#lr_reducer = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=8, verbose=VERBOSE, mode='auto', min_lr=0.00004)
+early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True, verbose=VERBOSE)
 
 CALLBACKS = [early_stopping]
 
@@ -1310,9 +1173,11 @@ independant_tweets["stance"] = independant_tweets["stance"].apply(lambda x: enco
 y_pred = final_model.predict([ ind_lines_pad_tweets, ind_lines_pad_target])
     
 y_pred_max = np.argmax(y_pred, axis=1)
-    
+
+# Micro F1-score  
 str("{:.2f}".format(f1_score(independant_tweets['stance'], y_pred_max, average="micro") * 100))+"%"
 
+# Macro F1-score
 str("{:.2f}".format(f1_score(independant_tweets['stance'], y_pred_max, average="macro") * 100))+"%"
 
 # Average F1-Score
@@ -1340,6 +1205,3 @@ for index, row in independant_tweets.iterrows():
   print("Actual: " + row['stance'])
   print("Predicted: " + decode_pred(y_pred_max[index]) )
   print("\n\n\n__________________________________\n")
-
-()
-
